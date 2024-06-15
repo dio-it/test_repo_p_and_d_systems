@@ -1,0 +1,168 @@
+x-consumer: &consumer
+  image: ditfedi1/stock-consumer
+  depends_on:
+    - rabbitmq
+  networks:
+    - backend
+  restart: always
+
+x-mongo: &mongo
+  image: mongo:7.0
+  command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+  networks:
+    - backend
+  volumes:
+    - ./04_MongoDB/mongo_data:/data/db
+    - ./04_MongoDB/mongo_config:/data/configdb
+  restart: always
+
+x-viewer: &viewer
+  image: ditfedi1/stock-viewer
+  environment:
+    PORT: "3000"
+    MONGODB_URL: ${MONGODB_URL}
+    MONGODB_DB: ${MONGODB_DB}
+    MONGODB_COLLECTION: ${MONGODB_COLLECTION}
+  depends_on:
+    - mongo1
+    - mongo2
+    - mongo3
+    - rabbitmq
+    - pub
+  networks:
+    - backend
+    - frontend
+  restart: always
+
+services:
+  pub:
+    image: ditfedi1/stock-publisher
+    container_name: stockPublisher
+    environment:
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      TICKER_INTERVAL: ${TICKER_INTERVAL}
+    restart: always
+    depends_on:
+      - rabbitmq
+    networks:
+      - backend
+
+  rabbitmq:
+    container_name: rabbitmq
+    image: rabbitmq:3-management
+    restart: always
+    depends_on:
+      - mongo1
+      - mongo2
+      - mongo3
+    ports:
+      - 5672:5672   # für message transfers
+      - 15672:15672 # für management Dashboard
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+    networks:
+      - backend
+
+  # DB-Cluster
+  mongo1:
+    container_name: mongo1
+    <<: *mongo
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--port", "27017"]
+    healthcheck:
+      test: echo "rs.initiate({_id:'rs0',members:[{_id:0,host:'mongo1:27017',priority:1},{_id:1,host:'mongo2:27018',priority:0.5},{_id:2,host:'mongo3:27019',priority:0.5}]})" | mongosh --port 27017 --quiet && echo "rs.status()" | mongosh --port 27017 --quiet
+      interval: 1m
+      timeout: 30s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - ./04_MongoDB/mongo1_data:/data/db
+      - ./04_MongoDB/mongo1_config:/data/configdb
+    ports:
+      - 27017:27017
+    expose:
+      - 27017
+    restart: always
+
+  mongo2:
+    container_name: mongo2
+    <<: *mongo
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--port", "27018"]
+    volumes:
+      - ./04_MongoDB/mongo2_data:/data/db
+      - ./04_MongoDB/mongo2_config:/data/configdb
+    ports:
+      - 27018:27018
+    expose:
+      - 27018
+    restart: always
+
+  mongo3:
+    container_name: mongo3
+    <<: *mongo
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--port", "27019"]
+    volumes:
+      - ./04_MongoDB/mongo3_data:/data/db
+      - ./04_MongoDB/mongo3_config:/data/configdb
+    ports:
+      - 27019:27019
+    expose:
+      - 27019
+    restart: always
+
+  consumer_aapl:
+    <<: *consumer
+    environment:
+      QUEUE_NAME: "AAPL"
+      MESSAGE_GROUP_SIZE: ${MESSAGE_GROUP_SIZE}
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      MONGODB_URL: ${MONGODB_URL}
+    restart: always
+
+  consumer_msft:
+    <<: *consumer
+    environment:
+      QUEUE_NAME: "MSFT"
+      MESSAGE_GROUP_SIZE: ${MESSAGE_GROUP_SIZE}
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      MONGODB_URL: ${MONGODB_URL}
+    restart: always
+
+  consumer_tsla:
+    <<: *consumer
+    environment:
+      QUEUE_NAME: "TSLA"
+      MESSAGE_GROUP_SIZE: ${MESSAGE_GROUP_SIZE}
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      MONGODB_URL: ${MONGODB_URL}
+    restart: always
+
+  live-viewer1:
+    container_name: stockViewer1
+    <<: *viewer
+    restart: always
+
+  live-viewer2:
+    container_name: stockViewer2
+    <<: *viewer
+    restart: always
+
+  nginx:
+    container_name: nginx
+    image: nginx:latest
+    ports:
+      - 3000:3000
+    volumes:
+      - ./06_nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - live-viewer1
+      - live-viewer2
+    networks:
+      - frontend
+    restart: always
+
+networks:
+  backend:
+    driver: bridge
+  frontend:
+    driver: bridge
